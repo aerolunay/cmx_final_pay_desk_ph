@@ -1,0 +1,28 @@
+{
+  "name": "backend",
+  "version": "2.1.5",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "aws-sdk": "^2.1692.0",
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.19",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1",
+    "file-saver": "^2.0.5",
+    "multer": "^2.0.2",
+    "mysql2": "^3.16.0",
+    "nodemailer": "^7.0.5",
+    "redis": "^5.8.2",
+    "xlsx": "^0.18.5"
+  }
+}
