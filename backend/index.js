@@ -46,7 +46,7 @@ app.use(express.json());
 
 app.use(
   cors({
-    origin: ["http://localhost:3000", FRONTEND_URL],
+    origin: ["http://localhost:3000",  "https://fpdesk.cmxph.com"],
     credentials: true,
   })
 );

@@ -17,8 +17,9 @@ app = FastAPI(title="FPDesk Python Service")
 # ---------------- CORS ----------------
 origins = [
     "http://localhost:3000",
-    FRONTEND_URL,
+    "https://fpdesk.cmxph.com",
 ]
+
 origins = [o for o in origins if o]
 
 app.add_middleware(
