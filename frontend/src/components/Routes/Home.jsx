@@ -433,6 +433,15 @@ const Home = () => {
   );
 
 
+  const getTATDays = (item) => {
+    const processedDate = safeDate(item.processed_date);
+    const separationDate = safeDate(item.date_resigned);
+
+    if (!processedDate || !separationDate) return null;
+
+    return Math.round((processedDate - separationDate) / (1000 * 60 * 60 * 24));
+  };
+
   return (
     <div className="h-screen overflow-hidden bg-[#f5f7fa] flex flex-col">
       <AppHeader />
@@ -531,9 +540,17 @@ const Home = () => {
               </div>
               <div className="mt-6">
                 <div className="text-sm font-semibold">Average Processing TAT</div>
-                <div className="text-[16px] font-semibold text-[#003b5c]">
-                  {averageTAT} days
-                </div>
+                  <div
+                    className={`text-[16px] font-semibold ${
+                      Number(averageTAT) < 30
+                        ? "text-green-700"
+                        : Number(averageTAT) <= 45
+                        ? "text-yellow-700"
+                        : "text-red-600"
+                    }`}
+                  >
+                    {averageTAT} days
+                  </div>
               </div>
             </div>
 
@@ -681,7 +698,7 @@ const Home = () => {
                     {sortConfig.find((c) => c.key === "date_hired")?.direction === "desc" && " ↓"}
                   </th>
                   <th
-                    className="text-left p-2 cursor-pointer select-none"
+                    className="text-center p-2 cursor-pointer select-none"
                     onDoubleClick={() => handleColumnSort("last_payout_cutoff")}
                     title="Double-click to sort"
                   >
@@ -690,7 +707,7 @@ const Home = () => {
                     {sortConfig.find((c) => c.key === "last_payout_cutoff")?.direction === "desc" && " ↓"}
                   </th>
                   <th
-                    className="text-left p-2 cursor-pointer select-none"
+                    className="text-center p-2 cursor-pointer select-none"
                     onDoubleClick={() => handleColumnSort("date_resigned")}
                     title="Double-click to sort"
                   >
@@ -699,7 +716,7 @@ const Home = () => {
                     {sortConfig.find((c) => c.key === "date_resigned")?.direction === "desc" && " ↓"}
                   </th>
                   <th
-                    className="text-left p-2 cursor-pointer select-none"
+                    className="text-center p-2 cursor-pointer select-none"
                     onDoubleClick={() => handleColumnSort("processed_by")}
                     title="Double-click to sort"
                   >
@@ -708,13 +725,16 @@ const Home = () => {
                     {sortConfig.find((c) => c.key === "processed_by")?.direction === "desc" && " ↓"}
                   </th>
                   <th
-                    className="text-left p-2 cursor-pointer select-none"
+                    className="text-center p-2 cursor-pointer select-none"
                     onDoubleClick={() => handleColumnSort("processed_date")}
                     title="Double-click to sort"
                   >
                     Date Processed
                     {sortConfig.find((c) => c.key === "processed_date")?.direction === "asc" && " ↑"}
                     {sortConfig.find((c) => c.key === "processed_date")?.direction === "desc" && " ↓"}
+                  </th>
+                  <th className="text-center p-2">
+                    TAT (Days)
                   </th>
                 </tr>
               </thead>
@@ -738,13 +758,29 @@ const Home = () => {
                       <td className="p-2">{item.empID}</td>
                       <td className="p-2">{item.Name}</td>
                       <td className="p-2">{item.position}</td>
-                      <td className="p-2">{formatDate(item.date_hired)}</td>
-                      <td className="p-2">{formatDate(item.last_payout_cutoff)}</td>
-                      <td className="p-2">{formatDate(item.date_resigned)}</td>
-                      <td className="p-2">
+                      <td className="p-2 text-center">{formatDate(item.date_hired)}</td>
+                      <td className="p-2 text-center">{formatDate(item.last_payout_cutoff)}</td>
+                      <td className="p-2 text-center">{formatDate(item.date_resigned)}</td>
+                      <td className="p-2 text-center">
                         {userMap[item.processed_by] || item.processed_by}
                       </td>
-                      <td className="p-2">{formatDate(item.processed_date)}</td>
+                      <td className="p-2 text-center">{formatDate(item.processed_date)}</td>
+                      <td
+                        className={`p-2 font-semibold text-center ${
+                          (() => {
+                            const tat = getTATDays(item);
+                            if (tat === null) return "text-gray-400";
+                            if (tat < 30) return "text-green-700";
+                            if (tat <= 45) return "text-yellow-700";
+                            return "text-red-600";
+                          })()
+                        }`}
+                      >
+                        {(() => {
+                          const tat = getTATDays(item);
+                          return tat ?? "—";
+                        })()}
+                      </td>
                     </tr>
                   ))
                 )}
