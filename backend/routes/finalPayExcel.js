@@ -5,37 +5,170 @@ const db = require("../config/dbconfig");
 
 const router = express.Router();
 
-/* -------------------------------------------------
- * Helpers
- * ------------------------------------------------- */
+/* =====================================================
+   Access Control
+   -----------------------------------------------------
+   Defense-in-depth:
+   - index.js should already mount this router behind auth.
+   - This file still checks req.user so it fails closed if
+     someone accidentally mounts it without protection.
+===================================================== */
+
+const PAYROLL_EXPORT_ROLES = new Set([
+  "dev",
+  "accounting admin",
+]);
+
+function normalizeRole(role) {
+  return String(role || "").trim().toLowerCase();
+}
+
+function normalizeEmpId(value) {
+  return String(value || "").trim();
+}
+
+function hasPayrollExportRole(user) {
+  return PAYROLL_EXPORT_ROLES.has(normalizeRole(user?.userLevel));
+}
+
+function isOwnRecord(req, empID) {
+  const requestedEmpId = normalizeEmpId(empID);
+  const userEmpId = normalizeEmpId(req.user?.empId);
+
+  return userEmpId && requestedEmpId && userEmpId === requestedEmpId;
+}
+
+function requireFinalPayExportAccess(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: "Unauthorized.",
+    });
+  }
+
+  const { empID } = req.params;
+
+  /*
+    Allowed:
+    - Admin / Super Admin / HR / Payroll / Finance
+    - Employee exporting own record, if you want that behavior enabled
+
+    If employees should NOT be allowed to export their own final pay,
+    remove: || isOwnRecord(req, empID)
+  */
+  if (!hasPayrollExportRole(req.user) && !isOwnRecord(req, empID)) {
+    return res.status(403).json({
+      success: false,
+      error: "Forbidden.",
+    });
+  }
+
+  next();
+}
+
+/* =====================================================
+   Helpers
+===================================================== */
 
 const toNumber = (val) => {
   const n = Number(val);
-  return isNaN(n) ? 0 : n;
+  return Number.isFinite(n) ? n : 0;
 };
 
 const toDate = (val) => {
+  if (!val) return null;
+
   const d = new Date(val);
-  return isNaN(d) ? null : d;
+  return Number.isNaN(d.getTime()) ? null : d;
 };
 
 const DATE_FIELDS = new Set([
+  "birthday",
+  "dob",
   "date_hired",
   "last_payout_cutoff",
   "date_resigned",
   "processed_date",
 ]);
 
-/* -------------------------------------------------
- * Route
- * ------------------------------------------------- */
+function isValidEmpId(empID) {
+  /*
+    Adjust this if your employee IDs have a stricter format.
+    This accepts numeric/alphanumeric IDs, dash, and underscore.
+  */
+  return /^[A-Za-z0-9_-]{1,30}$/.test(String(empID || "").trim());
+}
 
-router.get("/excel/:empID", async (req, res) => {
-  const { empID } = req.params;
+function makeSafeFileName(value, fallback = "Employee") {
+  const safe = String(value || fallback)
+    .replace(/[\\/:*?"<>|,\r\n\t]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return safe || fallback;
+}
+
+function setExcelDownloadHeaders(res, filename) {
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${filename}"`
+  );
+
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  );
+
+  /*
+    Payroll exports should not be cached by browser/proxy.
+  */
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+}
+
+function writeFieldMapToSheet(sheet, fieldMap) {
+  sheet.eachRow((row) => {
+    const keyRaw = row.getCell(1).value;
+    const key = String(keyRaw || "").trim();
+
+    if (!key || !(key in fieldMap)) return;
+
+    const cell = row.getCell(2);
+    const value = fieldMap[key];
+
+    if (DATE_FIELDS.has(key)) {
+      const dateVal = toDate(value);
+
+      if (dateVal) {
+        cell.value = dateVal;
+        cell.numFmt = "mm/dd/yyyy";
+      } else {
+        cell.value = value || "";
+      }
+
+      return;
+    }
+
+    cell.value = value;
+  });
+}
+
+/* =====================================================
+   Route
+===================================================== */
+
+router.get("/excel/:empID", requireFinalPayExportAccess, async (req, res) => {
+  const empID = normalizeEmpId(req.params.empID);
+
+  if (!isValidEmpId(empID)) {
+    return res.status(400).json({
+      success: false,
+      error: "Invalid employee ID.",
+    });
+  }
 
   try {
-    /* ---------------- Fetch data ---------------- */
-
     const [rows] = await db.query(
       `
         SELECT *
@@ -47,14 +180,16 @@ router.get("/excel/:empID", async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.status(404).json({ message: "Employee not found." });
+      return res.status(404).json({
+        success: false,
+        error: "Employee final pay record not found.",
+      });
     }
 
     const employee = rows[0];
 
-    /* ---------------- Load template ---------------- */
-
     const workbook = new ExcelJS.Workbook();
+
     const templatePath = path.resolve(
       __dirname,
       "../FileTemplate/cmx_fpc_template.xlsx"
@@ -63,13 +198,15 @@ router.get("/excel/:empID", async (req, res) => {
     await workbook.xlsx.readFile(templatePath);
 
     const sheet = workbook.getWorksheet("FinalPayData");
+
     if (!sheet) {
+      console.error("FinalPay Excel template missing worksheet: FinalPayData");
+
       return res.status(500).json({
-        message: "Template sheet 'FinalPayData' not found.",
+        success: false,
+        error: "Excel template is not configured correctly.",
       });
     }
-
-    /* ---------------- Field map ---------------- */
 
     const fieldMap = {
       empID: employee.empID || "",
@@ -122,58 +259,27 @@ router.get("/excel/:empID", async (req, res) => {
 
       processed_by: employee.processed_by || "",
       processed_date: employee.processed_date,
-      year: employee.year,
+      year: employee.year || "",
       contact: employee.contact || "",
-      dob: employee.birthday || ""
-
+      dob: employee.birthday || "",
     };
 
-    /* ---------------- Write values ---------------- */
-
-    sheet.eachRow((row) => {
-      const key = row.getCell(1).value;
-      if (!key || !(key in fieldMap)) return;
-
-      const cell = row.getCell(2);
-      const value = fieldMap[key];
-
-      if (DATE_FIELDS.has(key)) {
-        const dateVal = toDate(value);
-        if (dateVal) {
-          cell.value = dateVal;
-          cell.numFmt = "mm/dd/yyyy";
-        } else {
-          cell.value = value;
-        }
-      } else {
-        cell.value = value;
-      }
-    });
-
-    /* ---------------- Send file ---------------- */
+    writeFieldMapToSheet(sheet, fieldMap);
 
     const buffer = await workbook.xlsx.writeBuffer();
 
-    const safeName = String(employee.Name || empID)
-      .replace(/[\\/:*?"<>|,]/g, "_")
-      .trim();
+    const safeName = makeSafeFileName(employee.Name || empID);
+    const filename = `FinalPay_${safeName}.xlsx`;
 
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="FinalPay_${safeName}.xlsx"`
-    );
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
+    setExcelDownloadHeaders(res, filename);
 
-    res.send(buffer);
-
+    return res.send(buffer);
   } catch (error) {
-    console.error("❌ Excel export error:", error);
-    res.status(500).json({
-      message: "Error generating Excel file",
-      error: error.message || String(error),
+    console.error("FinalPay Excel export error:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: "Error generating Excel file.",
     });
   }
 });

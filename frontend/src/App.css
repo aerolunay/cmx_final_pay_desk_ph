@@ -32,6 +32,7 @@
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
@@ -46,8 +47,13 @@
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes scaleIn {
@@ -55,6 +61,7 @@
     opacity: 0;
     transform: scale(0.96);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -71,17 +78,141 @@ th:focus {
   outline: none !important;
 }
 
-@keyframes fadeIn {
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
 .input-readonly {
   @apply bg-gray-100 border border-gray-300 text-gray-700 px-2 py-1 rounded cursor-not-allowed;
 }
 
 .input-editable {
   @apply bg-white border border-blue-400 px-2 py-1 rounded focus:outline-none focus:ring-2 focus:ring-blue-400;
+}
+
+/* =====================================================
+   PRINT RULES
+   Print only PrintableFinalPay.jsx
+===================================================== */
+
+@media screen {
+  .print-only {
+    display: none !important;
+  }
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 0.15in;
+  }
+
+  html,
+  body,
+  #root {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    background: white !important;
+    overflow: visible !important;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  .print-only,
+  .print-only * {
+    display: block !important;
+    visibility: visible !important;
+  }
+
+  .print-only {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    color: black !important;
+    z-index: 999999 !important;
+    overflow: visible !important;
+  }
+
+  .print-page {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 9px !important;
+    line-height: 1.05 !important;
+    transform: scale(0.92) !important;
+    transform-origin: top left !important;
+    background: white !important;
+  }
+
+  .print-page * {
+    visibility: visible !important;
+    line-height: 1.05 !important;
+  }
+
+  .print-page .grid {
+    display: grid !important;
+  }
+
+  .print-page .flex {
+    display: flex !important;
+  }
+
+  .print-page .hidden {
+    display: none !important;
+  }
+
+  .print-page img {
+    max-height: 26px !important;
+  }
+
+  .print-page .border {
+    border-width: 1px !important;
+  }
+
+  .print-page .p-1 {
+    padding: 3px !important;
+  }
+
+  .print-page .mb-1 {
+    margin-bottom: 3px !important;
+  }
+
+  .print-page .mt-1 {
+    margin-top: 3px !important;
+  }
+
+  .print-page .gap-1 {
+    gap: 3px !important;
+  }
+
+  .no-print,
+  .no-print *,
+  header,
+  header *,
+  nav,
+  nav *,
+  aside,
+  aside *,
+  button,
+  button *,
+  canvas,
+  canvas * {
+    display: none !important;
+    visibility: hidden !important;
+  }
 }

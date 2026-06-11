@@ -1,3 +1,5 @@
-export const SERVER_URL = "https://fpdeskapi.cmxph.com"
-export const pythonSERVER_URL = "https://fpdeskpython.cmxph.com";
+const isDevelopment = process.env.NODE_ENV === "development";
 
+export const SERVER_URL = isDevelopment
+  ? "http://localhost:5012"
+  : "https://fpdeskapi.cmxph.com";

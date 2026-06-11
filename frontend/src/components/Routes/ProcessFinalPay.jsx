@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import AppHeader from "../common/AppHeader";
 import axios from "axios";
 import { SERVER_URL } from "../lib/constants";
+import UserService from "../../service/UserService";
+
 
 const INITIAL_FORM_DATA = {
   empID: "",
@@ -163,19 +165,52 @@ const ProcessFinalPay = () => {
   const [confirmationMessage, setConfirmationMessage] = useState("");
   const [formData, setFormData] = useState(INITIAL_FORM_DATA);
 
+
+
+
+  const getAuthConfig = () => ({
+  headers: {
+    ...UserService.getAuthHeader(),
+  },
+});
+
+const handleAuthError = (err) => {
+  const status = err?.response?.status;
+
+  if (status === 401) {
+    UserService.logout();
+    navigate("/OauthLogin", { replace: true });
+    return true;
+  }
+
+  if (status === 403) {
+    setConfirmationType("error");
+    setConfirmationMessage("You are not authorized to access this page.");
+    setShowConfirmation(true);
+    return true;
+  }
+
+  return false;
+};
   
   /* ================= FETCH DATA ================= */
 
-  useEffect(() => {
-    fetchEmployeeList();
-    fetchYTDPayrollData();
-  }, []);
-
-   const fetchEmployeeList = async () => {
+  const fetchEmployeeList = async () => {
     try {
-      const res = await axios.get(`${SERVER_URL}/api/employees`);
-      setEmpListData(Array.isArray(res.data) ? res.data : []);
+      const res = await axios.get(
+        `${SERVER_URL}/api/employees`,
+        getAuthConfig()
+      );
+
+      const employees = Array.isArray(res.data?.data)
+        ? res.data.data
+        : Array.isArray(res.data)
+        ? res.data
+        : [];
+
+      setEmpListData(employees);
     } catch (err) {
+      if (handleAuthError(err)) return;
       console.error("Fetch employees error:", err);
     } finally {
       setLoading(false);
@@ -184,14 +219,30 @@ const ProcessFinalPay = () => {
 
   const fetchYTDPayrollData = async () => {
     try {
-      const res = await axios.get(`${SERVER_URL}/api/ytdPayrollData`);
+      const res = await axios.get(
+        `${SERVER_URL}/api/ytdPayrollData`,
+        getAuthConfig()
+      );
+
       setYtdPayrollData(Array.isArray(res.data?.data) ? res.data.data : []);
     } catch (err) {
+      if (handleAuthError(err)) return;
       console.error("Fetch YTD payroll error:", err);
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!UserService.isAuthenticated()) {
+      navigate("/OauthLogin", { replace: true });
+      return;
+    }
+
+    fetchEmployeeList();
+    fetchYTDPayrollData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const isSaveDisabled = useMemo(() => {
     const requiredFields = [
@@ -217,7 +268,6 @@ const ProcessFinalPay = () => {
     return requiredFields.some((field) => {
       const value = formData[field];
 
-      // Consider "--" or empty as invalid
       return (
         value === undefined ||
         value === null ||
@@ -1098,7 +1148,8 @@ useEffect(() => {
       // 🔁 Send to backend
       const response = await axios.post(
         `${SERVER_URL}/api/saveFinalPay`,
-        payload
+        payload,
+        getAuthConfig()
       );
 
       if (response.data.success) {
