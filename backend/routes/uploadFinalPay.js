@@ -1,8 +1,11 @@
 const express = require("express");
 const multer = require("multer");
-const XLSX = require("xlsx");
+const ExcelJS = require("exceljs");
 const dayjs = require("dayjs");
+const customParseFormat = require("dayjs/plugin/customParseFormat");
 const db = require("../config/dbconfig");
+
+dayjs.extend(customParseFormat);
 
 const router = express.Router();
 
@@ -55,7 +58,7 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/octet-stream",
 ]);
 
-const ALLOWED_EXTENSIONS = new Set([".xlsx", ".xls"]);
+const ALLOWED_EXTENSIONS = new Set([".xlsx"]);
 
 function getFileExtension(filename) {
   const name = String(filename || "").toLowerCase();
@@ -63,10 +66,17 @@ function getFileExtension(filename) {
   return dotIndex >= 0 ? name.slice(dotIndex) : "";
 }
 
+const MAX_UPLOAD_FILE_SIZE_MB = 10;
+const MAX_UPLOAD_FILE_SIZE_BYTES = MAX_UPLOAD_FILE_SIZE_MB * 1024 * 1024;
+
+const TARGET_SHEET_NAME = "Summary";
+const HEADER_ROW_NUMBER = 4; // Excel row 4 contains the payroll headers
+const MAX_SUMMARY_ROWS_TO_READ = 10000;
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024,
+    fileSize: MAX_UPLOAD_FILE_SIZE_BYTES,
     files: 1,
   },
   fileFilter: (req, file, cb) => {
@@ -83,6 +93,30 @@ const upload = multer({
     cb(null, true);
   },
 });
+
+function handleSingleUpload(req, res, next) {
+  upload.single("file")(req, res, (err) => {
+    if (!err) return next();
+
+    if (err.message === "INVALID_FILE_TYPE") {
+      return sendUploadError(res, "Invalid file type. Please upload a .xlsx file.");
+    }
+
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return sendUploadError(
+        res,
+        `File is too large. Maximum size is ${MAX_UPLOAD_FILE_SIZE_MB}MB.`
+      );
+    }
+
+    console.error("Payroll multer upload error:", err);
+
+    return res.status(500).json({
+      success: false,
+      error: "Upload failed while receiving the file.",
+    });
+  });
+}
 
 /* =====================================================
    Utilities
@@ -110,19 +144,17 @@ function cleanNumeric(value) {
 function cleanDate(value) {
   if (!value) return null;
 
-  /*
-    Excel serial date support.
-  */
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return dayjs(value).format("YYYY-MM-DD");
+  }
+
   if (typeof value === "number") {
-    const parsed = XLSX.SSF.parse_date_code(value);
+    const utcMs = Math.round((value - 25569) * 86400 * 1000);
+    const parsedDate = new Date(utcMs);
 
-    if (!parsed) return null;
+    if (Number.isNaN(parsedDate.getTime())) return null;
 
-    const year = parsed.y;
-    const month = String(parsed.m).padStart(2, "0");
-    const day = String(parsed.d).padStart(2, "0");
-
-    return `${year}-${month}-${day}`;
+    return dayjs(parsedDate).format("YYYY-MM-DD");
   }
 
   const parsed = dayjs(
@@ -157,9 +189,6 @@ function sendUploadError(res, message, status = 400) {
 
 /* =====================================================
    Strict Column Allowlist
-   -----------------------------------------------------
-   This prevents uploaded Excel headers from deciding
-   arbitrary DB column names.
 ===================================================== */
 
 const allowedColumnMap = {
@@ -337,7 +366,6 @@ const stringColumns = new Set([
   "bank_account_number",
   "cost_center",
   "gender",
-  "expense_account",
 ]);
 
 const dateColumns = new Set(["date_hired"]);
@@ -379,13 +407,128 @@ function dedupeDbColumns(mapping) {
 }
 
 /* =====================================================
+   ExcelJS Reader
+===================================================== */
+
+function getExcelCellValue(cell) {
+  if (!cell) return "";
+
+  const value = cell.value;
+
+  if (value === null || value === undefined) return "";
+
+  if (value instanceof Date) return value;
+
+  if (typeof value === "object") {
+    if (Object.prototype.hasOwnProperty.call(value, "result")) {
+      return value.result ?? "";
+    }
+
+    if (Object.prototype.hasOwnProperty.call(value, "text")) {
+      return value.text ?? "";
+    }
+
+    if (Array.isArray(value.richText)) {
+      return value.richText.map((part) => part.text || "").join("");
+    }
+
+    if (Object.prototype.hasOwnProperty.call(value, "hyperlink")) {
+      return value.text ?? value.hyperlink ?? "";
+    }
+
+    return "";
+  }
+
+  return value;
+}
+
+function buildUniqueHeaders(headerRow) {
+  const headers = [];
+  const seen = new Map();
+
+  for (let colNumber = 1; colNumber <= headerRow.cellCount; colNumber += 1) {
+    const rawHeader = safeString(getExcelCellValue(headerRow.getCell(colNumber)));
+
+    if (!rawHeader) continue;
+
+    const usedCount = seen.get(rawHeader) || 0;
+    const uniqueHeader = usedCount === 0 ? rawHeader : `${rawHeader}_${usedCount}`;
+
+    seen.set(rawHeader, usedCount + 1);
+    headers[colNumber] = uniqueHeader;
+  }
+
+  return headers;
+}
+
+async function readSummaryRowsFromExcel(buffer) {
+  const workbook = new ExcelJS.Workbook();
+
+  await workbook.xlsx.load(buffer);
+
+  const sheetNames = workbook.worksheets.map((worksheet) => worksheet.name);
+  const worksheet = workbook.getWorksheet(TARGET_SHEET_NAME);
+
+  if (!worksheet) {
+    return {
+      found: false,
+      sheetNames,
+      rows: [],
+    };
+  }
+
+  const headerRow = worksheet.getRow(HEADER_ROW_NUMBER);
+  const headers = buildUniqueHeaders(headerRow);
+  const lastHeaderColumn = headers.length - 1;
+  const rows = [];
+
+  for (
+    let rowNumber = HEADER_ROW_NUMBER + 1;
+    rowNumber <= worksheet.rowCount && rowNumber <= MAX_SUMMARY_ROWS_TO_READ;
+    rowNumber += 1
+  ) {
+    const row = worksheet.getRow(rowNumber);
+    const record = {};
+    let hasValue = false;
+
+    for (let colNumber = 1; colNumber <= lastHeaderColumn; colNumber += 1) {
+      const header = headers[colNumber];
+
+      if (!header) continue;
+
+      const value = getExcelCellValue(row.getCell(colNumber));
+
+      if (
+        value !== null &&
+        value !== undefined &&
+        !(typeof value === "string" && value.trim() === "")
+      ) {
+        hasValue = true;
+      }
+
+      record[header] = value ?? "";
+    }
+
+    if (hasValue) {
+      rows.push(record);
+    }
+  }
+
+  return {
+    found: true,
+    sheetNames,
+    rows,
+  };
+}
+
+/* =====================================================
    Route
 ===================================================== */
 
 router.post(
   "/uploadFinalPay",
   requirePayrollUploadAccess,
-  upload.single("file"),
+  handleSingleUpload,
   async (req, res) => {
     try {
       if (!req.file) {
@@ -395,32 +538,41 @@ router.post(
       const ext = getFileExtension(req.file.originalname);
 
       if (!ALLOWED_EXTENSIONS.has(ext)) {
-        return sendUploadError(res, "Invalid file type.");
+        return sendUploadError(res, "Invalid file type. Please upload a .xlsx file.");
       }
 
-      let workbook;
+      let rows = [];
+      let sheetNames = [];
 
       try {
-        workbook = XLSX.read(req.file.buffer, {
-          type: "buffer",
-          cellDates: true,
-          WTF: false,
-        });
+        const readResult = await readSummaryRowsFromExcel(req.file.buffer);
+
+        rows = readResult.rows;
+        sheetNames = readResult.sheetNames;
+
+        if (!readResult.found) {
+          return sendUploadError(
+            res,
+            `${TARGET_SHEET_NAME} sheet not found. Found sheets: ${
+              sheetNames.length ? sheetNames.join(", ") : "none"
+            }.`
+          );
+        }
       } catch (parseErr) {
-        console.error("Excel parse error:", parseErr);
-        return sendUploadError(res, "Unable to read Excel file.");
+        console.error("Excel parse error:", {
+          message: parseErr.message,
+          code: parseErr.code,
+          stack: parseErr.stack,
+          originalname: req.file?.originalname,
+          fileSize: req.file?.size,
+          mimetype: req.file?.mimetype,
+        });
+
+        return sendUploadError(
+          res,
+          "Unable to read Excel file. Please save a clean .xlsx copy and upload again."
+        );
       }
-
-      const sheet = workbook.Sheets["Summary"];
-
-      if (!sheet) {
-        return sendUploadError(res, "Summary sheet not found.");
-      }
-
-      const rows = XLSX.utils.sheet_to_json(sheet, {
-        defval: "",
-        range: 4,
-      });
 
       if (!rows.length) {
         return sendUploadError(res, "No data rows found.");
@@ -450,10 +602,6 @@ router.post(
       }
 
       if (!Object.values(columnMapping).includes("employee_id")) {
-        /*
-          If your Excel first column is employee ID but has a different header,
-          this fallback maps the first source column to employee_id.
-        */
         const firstSourceKey = sourceKeys[0];
 
         if (!mappedSourceKeys.includes(firstSourceKey)) {
@@ -541,11 +689,14 @@ router.post(
       console.error("uploadFinalPay error:", err);
 
       if (err.message === "INVALID_FILE_TYPE") {
-        return sendUploadError(res, "Invalid file type.");
+        return sendUploadError(res, "Invalid file type. Please upload a .xlsx file.");
       }
 
       if (err.code === "LIMIT_FILE_SIZE") {
-        return sendUploadError(res, "File is too large. Maximum size is 10MB.");
+        return sendUploadError(
+          res,
+          `File is too large. Maximum size is ${MAX_UPLOAD_FILE_SIZE_MB}MB.`
+        );
       }
 
       return res.status(500).json({
